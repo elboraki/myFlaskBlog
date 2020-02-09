@@ -2,19 +2,20 @@
 import os
 import secrets
 from PIL import Image
-from myFlaskBlog import app,bcrypt,db
-from flask import  render_template, url_for, flash, redirect,request,abort
-from .forms import LoginForm, RegistrationForm,UpdateAccountForm,PostForm
-from .models import Post,User
-from flask_login import current_user,logout_user,login_required,login_user
-
+from myFlaskBlog import app, bcrypt, db,mail
+from flask import render_template, url_for, flash, redirect, request, abort
+from .forms import LoginForm, RegistrationForm, UpdateAccountForm, PostForm,RequestResetForm,ResetPasswordForm
+from .models import Post, User
+from flask_login import current_user, logout_user, login_required, login_user
+from flask_mail import Message
 
 
 @app.route("/")
 @app.route("/home")
 def home():
-    page=request.args.get('page',1,type=int)
-    posts = Post.query.order_by(Post.date_posted.desc()).paginate(page=page,per_page=5)
+    page = request.args.get('page', 1, type=int)
+    posts = Post.query.order_by(
+        Post.date_posted.desc()).paginate(page=page, per_page=5)
     return render_template("home.html", posts=posts)
 
 
@@ -29,8 +30,10 @@ def register():
         return redirect(url_for('home'))
     form = RegistrationForm()
     if form.validate_on_submit():
-        hashed_password=bcrypt.generate_password_hash(form.password.data).decode("utf-8")
-        user=User(username=form.username.data,email=form.email.data,password=hashed_password)
+        hashed_password = bcrypt.generate_password_hash(
+            form.password.data).decode("utf-8")
+        user = User(username=form.username.data,
+                    email=form.email.data, password=hashed_password)
         db.session.add(user)
         db.session.commit()
         flash(f'Account created for {form.username.data}!', 'success')
@@ -44,10 +47,10 @@ def login():
         return redirect(url_for('home'))
     form = LoginForm()
     if form.validate_on_submit():
-        user=User.query.filter_by(email=form.email.data).first()
-        if user and bcrypt.check_password_hash(user.password,form.password.data):
-            login_user(user,remember=form.remember.data)
-            next_page=request.args.get("next")
+        user = User.query.filter_by(email=form.email.data).first()
+        if user and bcrypt.check_password_hash(user.password, form.password.data):
+            login_user(user, remember=form.remember.data)
+            next_page = request.args.get("next")
             flash('You have been looged in', "success")
             return redirect(next_page) if next_page else redirect(url_for('home'))
         else:
@@ -56,10 +59,11 @@ def login():
 
 
 def save_picture(form_picture):
-    random_hex=secrets.token_hex(8)
+    random_hex = secrets.token_hex(8)
     _, f_ext = os.path.splitext(form_picture.filename)
     picture_fn = random_hex + f_ext
-    picture_path = os.path.join(app.root_path, 'static/profile_pics', picture_fn)
+    picture_path = os.path.join(
+        app.root_path, 'static/profile_pics', picture_fn)
 
     output_size = (125, 125)
     i = Image.open(form_picture)
@@ -69,24 +73,26 @@ def save_picture(form_picture):
     return picture_fn
 
 
-@app.route("/account",methods=["GET","POST"])
+@app.route("/account", methods=["GET", "POST"])
 @login_required
 def account():
-    form=UpdateAccountForm()
+    form = UpdateAccountForm()
     if form.validate_on_submit():
         if form.picture.data:
-            picture_file=save_picture(form.picture.data)
-            current_user.image_file=picture_file
-        current_user.username=form.username.data
-        current_user.email=form.email.data
+            picture_file = save_picture(form.picture.data)
+            current_user.image_file = picture_file
+        current_user.username = form.username.data
+        current_user.email = form.email.data
         db.session.commit()
-        flash("Your account has been updated","success")
+        flash("Your account has been updated", "success")
         return redirect(url_for("account"))
-    elif request.method=='GET':
-        current_user.username=form.username.data
-        current_user.email=form.email.data
-    image_file=url_for('static',filename='profile_pics/'+current_user.image_file)
-    return render_template("account.html",title="account",image_file=image_file,form=form)
+    elif request.method == 'GET':
+        current_user.username = form.username.data
+        current_user.email = form.email.data
+    image_file = url_for(
+        'static', filename='profile_pics/'+current_user.image_file)
+    return render_template("account.html", title="account", image_file=image_file, form=form)
+
 
 @app.route("/logout")
 def logout():
@@ -97,15 +103,17 @@ def logout():
 @app.route("/post/new", methods=['GET', 'POST'])
 @login_required
 def new_post():
-    form=PostForm()
+    form = PostForm()
     if form.validate_on_submit():
-        post=Post(title=form.title.data,content=form.content.data,author=current_user)
+        post = Post(title=form.title.data,
+                    content=form.content.data, author=current_user)
         db.session.add(post)
         db.session.commit()
         flash('Your post has been created!', 'success')
         return redirect(url_for('home'))
     return render_template('create_post.html', title='New Post',
                            form=form, legend='New Post')
+
 
 @app.route("/post/<int:post_id>")
 def post(post_id):
@@ -133,7 +141,6 @@ def update_post(post_id):
                            form=form, legend='Update Post')
 
 
-
 @app.route("/post/<int:post_id>/delete", methods=['POST'])
 @login_required
 def delete_post(post_id):
@@ -154,3 +161,47 @@ def user_posts(username):
         .order_by(Post.date_posted.desc())\
         .paginate(page=page, per_page=5)
     return render_template('user_posts.html', posts=posts, user=user)
+
+
+def send_reset_email(user):
+    token = user.get_reset_token()
+    msg = Message('Password Reset Request',
+                  sender='noreply@demo.com',
+                  recipients=[user.email])
+    msg.body = f'''To reset your password, visit the following link:
+{url_for('reset_token', token=token, _external=True)}
+If you did not make this request then simply ignore this email and no changes will be made.
+'''
+    mail.send(msg)
+
+
+@app.route("/reset_password", methods=['GET', 'POST'])
+def reset_request():
+    if current_user.is_authenticated:
+        return redirect(url_for('home'))
+    form = RequestResetForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(email=form.email.data).first()
+        send_reset_email(user)
+        flash('An email has been sent with instructions to reset your password.', 'info')
+        return redirect(url_for('login'))
+    return render_template('reset_request.html', title='Reset Password', form=form)
+
+
+@app.route("/reset_password/<token>", methods=['GET', 'POST'])
+def reset_token(token):
+    if current_user.is_authenticated:
+        return redirect(url_for('home'))
+    user = User.verify_reset_token(token)
+    if user is None:
+        flash('That is an invalid or expired token', 'warning')
+        return redirect(url_for('reset_request'))
+    form = ResetPasswordForm()
+    if form.validate_on_submit():
+        hashed_password = bcrypt.generate_password_hash(
+            form.password.data).decode('utf-8')
+        user.password = hashed_password
+        db.session.commit()
+        flash('Your password has been updated! You are now able to log in', 'success')
+        return redirect(url_for('login'))
+    return render_template('reset_token.html', title='Reset Password', form=form)
